@@ -31,9 +31,10 @@ analyzer = DocumentAnalyzer(api_key)
 uploaded_file = st.file_uploader(
     "Upload Document",
     type=["pdf", "docx"],
-    key="document_upload",
-    accept_multiple_files=False
+    key="document_upload"
 )
+
+st.write("uploaded_file =", uploaded_file)
 
 if uploaded_file:
 
