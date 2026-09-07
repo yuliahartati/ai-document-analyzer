@@ -3,6 +3,8 @@ import base64
 import requests
 import json
 import time
+from PyPDF2 import PdfReader
+import io
 
 st.set_page_config(
     page_title="AI Document Analyzer",
@@ -11,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for clean mobile UI and dark mode compatibility
+# Custom CSS for clean mobile UI
 st.markdown("""
     <style>
     .main {
@@ -22,11 +24,11 @@ st.markdown("""
         border-radius: 12px;
         height: 3em;
         font-weight: bold;
-        background-color: #4F46E5;
+        background-color: #10A37F;
         color: white;
     }
     .uploadedFile {
-        border: 2px dashed #4F46E5;
+        border: 2px dashed #10A37F;
         border-radius: 10px;
         padding: 10px;
     }
@@ -37,53 +39,79 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📄 AI Document Analyzer")
-st.caption("Powered by Gemini 3 Flash | Mobile Optimized")
+st.caption("Powered by OpenAI GPT-4o-mini | Mobile Optimized")
 
 # Sidebar for API Key input
 with st.sidebar:
     st.header("⚙️ Konfigurasi")
-    api_key_input = st.text_input("Gemini API Key", type="password", help="Masukkan API Key Gemini Anda")
-    st.info("API Key bisa didapatkan gratis di Google AI Studio.")
+    api_key_input = st.text_input("OpenAI API Key", type="password", help="Masukkan OpenAI API Key Anda (sk-...)")
+    st.info("Dapatkan API Key di platform.openai.com")
 
-def analyze_document_with_gemini(api_key, file_bytes, mime_type, prompt_text):
+def extract_text_from_pdf(file_bytes):
+    """Ekstrak teks dari file PDF"""
+    try:
+        pdf_reader = PdfReader(io.BytesIO(file_bytes))
+        text = ""
+        for page in pdf_reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+        return text if text.strip() else None
+    except Exception as e:
+        return None
+
+def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
     """
-    Mengirimkan dokumen langsung dalam format Base64 ke Gemini 3 Flash API.
-    Metode ini sangat ringan dan tidak membuat server/HP crash.
+    Mengirim konten ke OpenAI GPT-4o-mini API
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     
-    # Encode bytes to Base64
-    base64_data = base64.b64encode(file_bytes).decode('utf-8')
+    messages_content = []
     
+    # Process file based on type
+    if "image" in mime_type:
+        base64_image = base64.b64encode(file_bytes).decode('utf-8')
+        messages_content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{base64_image}"
+            }
+        })
+        messages_content.append({"type": "text", "text": prompt_text})
+    elif "pdf" in mime_type or file_name.endswith(".pdf"):
+        extracted_text = extract_text_from_pdf(file_bytes)
+        if not extracted_text:
+            return "❌ Tidak dapat membaca teks dari PDF. File mungkin berupa hasil scan gambar atau terkunci."
+        combined_prompt = f"{prompt_text}\n\n--- Isi Dokumen ({file_name}) ---\n{extracted_text[:12000]}"
+        messages_content.append({"type": "text", "text": combined_prompt})
+    else:
+        # Plain text
+        try:
+            text_content = file_bytes.decode('utf-8')
+            combined_prompt = f"{prompt_text}\n\n--- Isi Dokumen ({file_name}) ---\n{text_content[:12000]}"
+            messages_content.append({"type": "text", "text": combined_prompt})
+        except Exception:
+            return "❌ Gagal membaca isi file teks."
+
     payload = {
-        "contents": [
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Anda adalah asisten analisis dokumen profesional. Berikan respon yang akurat, terstruktur, mudah dibaca di layar HP, dan langsung pada poin utama menggunakan format Markdown."
+            },
             {
                 "role": "user",
-                "parts": [
-                    {
-                        "inlineData": {
-                            "mimeType": mime_type,
-                            "data": base64_data
-                        }
-                    },
-                    {
-                        "text": prompt_text
-                    }
-                ]
+                "content": messages_content
             }
         ],
-        "systemInstruction": {
-            "parts": [
-                {
-                    "text": "Anda adalah asisten analisis dokumen profesional. Berikan respon yang akurat, terstruktur, mudah dibaca di layar HP, dan langsung pada poin utama menggunakan format Markdown."
-                }
-            ]
-        }
+        "temperature": 0.3
     }
 
-    headers = {'Content-Type': 'application/json'}
-    
-    # Exponential backoff implementation for API retries
     max_retries = 3
     delay = 1
     
@@ -92,18 +120,15 @@ def analyze_document_with_gemini(api_key, file_bytes, mime_type, prompt_text):
             response = requests.post(url, headers=headers, json=payload, timeout=60)
             if response.status_code == 200:
                 result = response.json()
-                try:
-                    return result['candidates'][0]['content']['parts'][0]['text']
-                except (KeyError, IndexError):
-                    return "❌ Gagal mengekstrak respon dari model. Format output tidak sesuai."
+                return result['choices'][0]['message']['content']
             elif response.status_code == 429:
                 time.sleep(delay)
                 delay *= 2
             else:
-                return f"❌ Error API ({response.status_code}): {response.text}"
+                return f"❌ Error API ({response.status_code}): {response.json().get('error', {}).get('message', response.text)}"
         except Exception as e:
             if attempt == max_retries - 1:
-                return f"❌ Gagal menghubungi API: {str(e)}"
+                return f"❌ Gagal menghubungi OpenAI API: {str(e)}"
             time.sleep(delay)
             delay *= 2
 
@@ -114,7 +139,6 @@ uploaded_file = st.file_uploader(
     help="Maksimal rekomendasi 10MB untuk performa HP optimal"
 )
 
-# File status and details
 if uploaded_file is not None:
     file_size_mb = uploaded_file.size / (1024 * 1024)
     st.success(f"📎 **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
@@ -136,17 +160,16 @@ analysis_mode = st.selectbox(
 
 custom_prompt = ""
 if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)":
-    custom_prompt = st.text_area("Tuliskan pertanyaan spesifik Anda tentang dokumen ini:", placeholder="Contoh: Apa saja klausul pembatalan dalam kontrak ini?")
+    custom_prompt = st.text_area("Tuliskan pertanyaan spesifik Anda tentang dokumen ini:", placeholder="Contoh: Apa saja klausul pembatalan dalam dokumen ini?")
 
 st.subheader("3. Jalankan Analisis")
 
 if st.button("🚀 Analisis Dokumen Sekarang"):
     if not api_key_input:
-        st.error("⚠️ Silakan masukkan **Gemini API Key** di menu sidebar samping kiri terlebih dahulu!")
+        st.error("⚠️ Silakan masukkan **OpenAI API Key** di menu sidebar samping kiri terlebih dahulu!")
     elif uploaded_file is None:
         st.error("⚠️ Silakan atur dan **unggah file** terlebih dahulu!")
     else:
-        # Determine prompt based on selected mode
         prompt_map = {
             "📌 Ringkasan Eksekutif & Poin Utama": "Berikan ringkasan eksekutif komprehensif dari dokumen ini. Buatlah daftar 5-7 poin utama yang paling penting.",
             "💡 Analisis Mendalam & Jawaban Kunci": "Lakukan analisis mendalam terhadap isi dokumen ini. Jelaskan konteks, argumen utama, serta kesimpulan penting yang disampaikan.",
@@ -155,26 +178,15 @@ if st.button("🚀 Analisis Dokumen Sekarang"):
         
         final_prompt = custom_prompt if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)" else prompt_map[analysis_mode]
 
-        # Read file bytes directly
         file_bytes = uploaded_file.getvalue()
-        mime_type = uploaded_file.type
-        
-        # Fallback for plain text mime type if missing
-        if not mime_type:
-            if uploaded_file.name.endswith(".pdf"):
-                mime_type = "application/pdf"
-            elif uploaded_file.name.endswith(".txt"):
-                mime_type = "text/plain"
-            elif uploaded_file.name.endswith((".png", ".jpg", ".jpeg")):
-                mime_type = f"image/{uploaded_file.name.split('.')[-1]}"
+        mime_type = uploaded_file.type or "application/octet-stream"
 
-        with st.spinner("⏳ Memproses & Menganalisis dokumen langsung via Gemini AI..."):
-            result_text = analyze_document_with_gemini(api_key_input, file_bytes, mime_type, final_prompt)
+        with st.spinner("⏳ Memproses & Menganalisis dokumen via OpenAI GPT-4o-mini..."):
+            result_text = analyze_with_openai(api_key_input, file_bytes, mime_type, uploaded_file.name, final_prompt)
 
         st.subheader("📊 Hasil Analisis")
         st.markdown(result_text)
         
-        # Option to download result as TXT
         st.download_button(
             label="📥 Unduh Hasil Analisis (.txt)",
             data=result_text,
