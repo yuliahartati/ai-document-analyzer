@@ -5,6 +5,7 @@ import json
 import time
 from PyPDF2 import PdfReader
 import io
+import os
 
 st.set_page_config(
     page_title="AI Document Analyzer",
@@ -41,11 +42,22 @@ st.markdown("""
 st.title("📄 AI Document Analyzer")
 st.caption("Powered by OpenAI GPT-4o-mini | Mobile Optimized")
 
-# Sidebar for API Key input
+def get_api_key():
+    """Mengambil API key dari Streamlit Secrets atau Environment Variable"""
+    if "OPENAI_API_KEY" in st.secrets:
+        return st.secrets["OPENAI_API_KEY"]
+    return os.environ.get("OPENAI_API_KEY")
+
+api_key = get_api_key()
+
+# Sidebar hanya untuk informasi status
 with st.sidebar:
-    st.header("⚙️ Konfigurasi")
-    api_key_input = st.text_input("OpenAI API Key", type="password", help="Masukkan OpenAI API Key Anda (sk-...)")
-    st.info("Dapatkan API Key di platform.openai.com")
+    st.header("⚙️ Status App")
+    if api_key:
+        st.success("✅ OpenAI API Key terdeteksi di Secrets!")
+    else:
+        st.error("⚠️ API Key belum diatur di Streamlit Secrets.")
+        st.info("Tambahkan `OPENAI_API_KEY = 'sk-...'` di menu Settings -> Secrets di Streamlit Cloud.")
 
 def extract_text_from_pdf(file_bytes):
     """Ekstrak teks dari file PDF"""
@@ -57,13 +69,11 @@ def extract_text_from_pdf(file_bytes):
             if extracted:
                 text += extracted + "\n"
         return text if text.strip() else None
-    except Exception as e:
+    except Exception:
         return None
 
 def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
-    """
-    Mengirim konten ke OpenAI GPT-4o-mini API
-    """
+    """Mengirim konten ke OpenAI GPT-4o-mini API"""
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -72,7 +82,6 @@ def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
     
     messages_content = []
     
-    # Process file based on type
     if "image" in mime_type:
         base64_image = base64.b64encode(file_bytes).decode('utf-8')
         messages_content.append({
@@ -89,7 +98,6 @@ def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
         combined_prompt = f"{prompt_text}\n\n--- Isi Dokumen ({file_name}) ---\n{extracted_text[:12000]}"
         messages_content.append({"type": "text", "text": combined_prompt})
     else:
-        # Plain text
         try:
             text_content = file_bytes.decode('utf-8')
             combined_prompt = f"{prompt_text}\n\n--- Isi Dokumen ({file_name}) ---\n{text_content[:12000]}"
@@ -165,8 +173,8 @@ if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)":
 st.subheader("3. Jalankan Analisis")
 
 if st.button("🚀 Analisis Dokumen Sekarang"):
-    if not api_key_input:
-        st.error("⚠️ Silakan masukkan **OpenAI API Key** di menu sidebar samping kiri terlebih dahulu!")
+    if not api_key:
+        st.error("⚠️ API Key tidak ditemukan! Silakan tambahkan `OPENAI_API_KEY` di **Streamlit Cloud Secrets** (Settings -> Secrets).")
     elif uploaded_file is None:
         st.error("⚠️ Silakan atur dan **unggah file** terlebih dahulu!")
     else:
@@ -182,7 +190,7 @@ if st.button("🚀 Analisis Dokumen Sekarang"):
         mime_type = uploaded_file.type or "application/octet-stream"
 
         with st.spinner("⏳ Memproses & Menganalisis dokumen via OpenAI GPT-4o-mini..."):
-            result_text = analyze_with_openai(api_key_input, file_bytes, mime_type, uploaded_file.name, final_prompt)
+            result_text = analyze_with_openai(api_key, file_bytes, mime_type, uploaded_file.name, final_prompt)
 
         st.subheader("📊 Hasil Analisis")
         st.markdown(result_text)
@@ -195,4 +203,4 @@ if st.button("🚀 Analisis Dokumen Sekarang"):
         )
 
 st.markdown("---")
-st.caption("Tips HP Android: Jika aplikasi sering restart, buat file `.streamlit/config.toml` di repo GitHub kamu dengan opsi `maxUploadSize = 200`.")
+st.caption("Tips HP Android: Pastikan `OPENAI_API_KEY` sudah terpasang di Secrets aplikasi ini.")
