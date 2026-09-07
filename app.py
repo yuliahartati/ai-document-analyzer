@@ -44,13 +44,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("📄 AI Document Analyzer")
-st.caption("Powered by OpenAI GPT-4o-mini | Mobile Optimized")
+st.caption("Analisis dokumen berbasis AI")
 
 def get_api_key():
-    """Mengambil API key dari Streamlit Secrets atau Environment Variable"""
-    if "OPENAI_API_KEY" in st.secrets:
-        return st.secrets["OPENAI_API_KEY"]
-    return os.environ.get("OPENAI_API_KEY")
+    """Mengambil API key dari Streamlit Secrets"""
+    return st.secrets.get("OPENAI_API_KEY", "")
 
 api_key = get_api_key()
 
@@ -68,7 +66,7 @@ def extract_text_from_pdf(file_bytes):
         return None
 
 def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
-    """Mengirim konten ke OpenAI GPT-4o-mini API"""
+    """Mengirim konten ke OpenAI API"""
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -105,6 +103,100 @@ def analyze_with_openai(api_key, file_bytes, mime_type, file_name, prompt_text):
         "messages": [
             {
                 "role": "system",
+                "content": "Anda adalah asisten analisis dokumen profesional. Berikan respon yang akurat, terstruktur, mudah dibaca di layar HP, dan langsung pada poin utama menggunakan format Markdown."
+            },
+            {
+                "role": "user",
+                "content": messages_content
+            }
+        ],
+        "temperature": 0.3
+    }
+
+    max_retries = 3
+    delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            if response.status_code == 200:
+                result = response.json()
+                return result['choices'][0]['message']['content']
+            elif response.status_code == 429:
+                time.sleep(delay)
+                delay *= 2
+            else:
+                return f"❌ Error API ({response.status_code}): {response.json().get('error', {}).get('message', response.text)}"
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return f"❌ Gagal menghubungi API: {str(e)}"
+            time.sleep(delay)
+            delay *= 2
+
+st.subheader("1. Unggah Dokumen")
+uploaded_file = st.file_uploader(
+    "Pilih file (PDF, TXT, PNG, JPG)", 
+    type=["pdf", "txt", "png", "jpg", "jpeg"],
+    help="Maksimal rekomendasi 10MB untuk performa HP optimal"
+)
+
+if uploaded_file is not None:
+    file_size_mb = uploaded_file.size / (1024 * 1024)
+    st.success(f"📎 **{uploaded_file.name}** ({file_size_mb:.2f} MB)")
+    
+    if file_size_mb > 15:
+        st.warning("⚠️ Ukuran file cukup besar, proses analisis mungkin membutuhkan waktu lebih lama di HP.")
+
+st.subheader("2. Pilih Mode Analisis")
+
+analysis_mode = st.selectbox(
+    "Ingin analisis seperti apa?",
+    [
+        "📌 Ringkasan Eksekutif & Poin Utama",
+        "💡 Analisis Mendalam & Jawaban Kunci",
+        "📋 Ekstraksi Action Items / Tugas",
+        "🔍 Tanya Jawab Kustom (Custom Prompt)"
+    ]
+)
+
+custom_prompt = ""
+if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)":
+    custom_prompt = st.text_area("Tuliskan pertanyaan spesifik Anda tentang dokumen ini:", placeholder="Contoh: Apa saja klausul pembatalan dalam dokumen ini?")
+
+st.subheader("3. Jalankan Analisis")
+
+if st.button("🚀 Analisis Dokumen Sekarang"):
+    if not api_key:
+        st.error("Aplikasi sedang mengalami konfigurasi. Silakan coba lagi beberapa saat.")
+    elif uploaded_file is None:
+        st.error("⚠️ Silakan unggah file terlebih dahulu!")
+    else:
+        prompt_map = {
+            "📌 Ringkasan Eksekutif & Poin Utama": "Berikan ringkasan eksekutif komprehensif dari dokumen ini. Buatlah daftar 5-7 poin utama yang paling penting.",
+            "💡 Analisis Mendalam & Jawaban Kunci": "Lakukan analisis mendalam terhadap isi dokumen ini. Jelaskan konteks, argumen utama, serta kesimpulan penting yang disampaikan.",
+            "📋 Ekstraksi Action Items / Tugas": "Ekstrak semua tindakan/langkah kerja (action items), rekomendasi, atau tugas yang disebutkan dalam dokumen ini dalam bentuk checklist."
+        }
+        
+        final_prompt = custom_prompt if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)" else prompt_map[analysis_mode]
+
+        file_bytes = uploaded_file.getvalue()
+        mime_type = uploaded_file.type or "application/octet-stream"
+
+        with st.spinner("⏳ Sedang menganalisis dokumen..."):
+            result_text = analyze_with_openai(api_key, file_bytes, mime_type, uploaded_file.name, final_prompt)
+
+        st.subheader("📊 Hasil Analisis")
+        st.markdown(result_text)
+        
+        st.download_button(
+            label="📥 Unduh Hasil Analisis (.txt)",
+            data=result_text,
+            file_name=f"Analisis_{uploaded_file.name}.txt",
+            mime="text/plain"
+        )
+
+st.markdown("---")
+st.caption("AI Document Analyzer • Powered by OpenAI")                "role": "system",
                 "content": "Anda adalah asisten analisis dokumen profesional. Berikan respon yang akurat, terstruktur, mudah dibaca di layar HP, dan langsung pada poin utama menggunakan format Markdown."
             },
             {
