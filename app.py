@@ -1,118 +1,60 @@
-import streamlit as st
-from io import BytesIO
-import traceback
-
-from parser import extract_text
-from analyzer import DocumentAnalyzer
-from utils import (
-    parse_response,
-    build_markdown_report,
-    item_count
+analysis_mode = st.selectbox(
+    "Ingin analisis seperti apa?",
+    [
+        "📌 Ringkasan Eksekutif & Poin Utama",
+        "💡 Analisis Mendalam & Jawaban Kunci",
+        "📋 Ekstraksi Action Items / Tugas",
+        "🔍 Tanya Jawab Kustom (Custom Prompt)"
+    ]
 )
 
-st.set_page_config(
-    page_title="AI Document Analyzer",
-    page_icon="📄",
-    layout="wide"
-)
+custom_prompt = ""
+if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)":
+    custom_prompt = st.text_area("Tuliskan pertanyaan spesifik Anda tentang dokumen ini:", placeholder="Contoh: Apa saja klausul pembatalan dalam kontrak ini?")
 
-st.title("📄 AI Document Analyzer")
+st.subheader("3. Jalankan Analisis")
 
-st.write(
-    "Upload a PDF atau DOCX untuk generate summary, insights, facts, claims, dan action items."
-)
-
-api_key = st.secrets.get("OPENAI_API_KEY", None)
-if not api_key:
-    st.error("OPENAI_API_KEY not found.")
-    st.stop()
-
-# Simple wrapper that mimics the attributes/methods parser expects
-class UploadedBytesWrapper:
-    def init(self, name: str, data: bytes, mime_type: str = ""):
-        self.name = name
-        self._data = data
-        self.type = mime_type or ""
-        self.size = len(data)
-
-    def read(self):
-        # return full bytes every time (parser expects bytes)
-        return self._data
-
-# File uploader (restrict to pdf/docx)
-uploaded = st.file_uploader(
-    "Upload Document",
-    type=["pdf", "docx"],
-    key="document_upload"
-)
-
-# If user selected via file_uploader, read once and store bytes in session_state
-if uploaded is not None:
-    prev_name = st.session_state.get("uploaded_name")
-    # only read and store when different file is chosen
-    if prev_name != uploaded.name:
-        try:
-            data = uploaded.read()
-            st.session_state["uploaded_bytes"] = data
-            st.session_state["uploaded_name"] = uploaded.name
-            st.session_state["uploaded_type"] = uploaded.type
-            st.success(f"File dimuat ({len(data)} bytes)")
-        except Exception as e:
-            st.error("Gagal membaca file yang di-upload.")
-            st.exception(e)
-
-# If session_state has the uploaded bytes, show info and allow analyze
-if st.session_state.get("uploaded_bytes"):
-    name = st.session_state["uploaded_name"]
-    data = st.session_state["uploaded_bytes"]
-    mime = st.session_state.get("uploaded_type", "")
-    st.write("Nama :", name)
-    st.write("Tipe :", mime)
-    st.write("Ukuran :", len(data), "bytes")
-
-    # Optional: warn when file is large (adjust threshold sesuai hosting)
-    max_allowed = 200 * 1024 * 1024  # 200 MB
-    if len(data) > max_allowed:
-        st.error("File terlalu besar untuk diproses di sini (>200MB).")
+if st.button("🚀 Analisis Dokumen Sekarang"):
+    if not api_key_input:
+        st.error("⚠️ Silakan masukkan Gemini API Key di menu sidebar samping kiri terlebih dahulu!")
+    elif uploaded_file is None:
+        st.error("⚠️ Silakan atur dan unggah file terlebih dahulu!")
     else:
-        if st.button("📄 Analyze Document"):
-            # instantiate analyzer here to avoid heavy startup work
-            analyzer = DocumentAnalyzer(api_key)
+        # Determine prompt based on selected mode
+        prompt_map = {
+            "📌 Ringkasan Eksekutif & Poin Utama": "Berikan ringkasan eksekutif komprehensif dari dokumen ini. Buatlah daftar 5-7 poin utama yang paling penting.",
+            "💡 Analisis Mendalam & Jawaban Kunci": "Lakukan analisis mendalam terhadap isi dokumen ini. Jelaskan konteks, argumen utama, serta kesimpulan penting yang disampaikan.",
+            "📋 Ekstraksi Action Items / Tugas": "Ekstrak semua tindakan/langkah kerja (action items), rekomendasi, atau tugas yang disebutkan dalam dokumen ini dalam bentuk checklist."
+        }
+        
+        final_prompt = custom_prompt if analysis_mode == "🔍 Tanya Jawab Kustom (Custom Prompt)" else prompt_map[analysis_mode]
 
-            # create wrapper to call existing extract_text(uploaded_file)
-            wrapper = UploadedBytesWrapper(name, data, mime)
+        # Read file bytes directly
+        file_bytes = uploaded_file.getvalue()
+        mime_type = uploaded_file.type
+        
+        # Fallback for plain text mime type if missing
+        if not mime_type:
+            if uploaded_file.name.endswith(".pdf"):
+                mime_type = "application/pdf"
+            elif uploaded_file.name.endswith(".txt"):
+                mime_type = "text/plain"
+            elif uploaded_file.name.endswith((".png", ".jpg", ".jpeg")):
+                mime_type = f"image/{uploaded_file.name.split('.')[-1]}"
 
-            try:
-                with st.spinner("Extracting text..."):
-                    document_text = extract_text(wrapper)
-            except Exception as e:
-                st.error("Gagal mengekstrak teks dari dokumen.")
-                st.exception(e)
-                st.write("Traceback:")
-                st.text(traceback.format_exc())
-                st.stop()
+        with st.spinner("⏳ Memproses & Menganalisis dokumen langsung via Gemini AI..."):
+            result_text = analyze_document_with_gemini(api_key_input, file_bytes, mime_type, final_prompt)
 
-            if not document_text or not document_text.strip():
-                st.error("No readable text found in the document. Jika ini scan (gambar), gunakan OCR.")
-                st.stop()
+        st.subheader("📊 Hasil Analisis")
+        st.markdown(result_text)
+        
+        # Option to download result as TXT
+        st.download_button(
+            label="📥 Unduh Hasil Analisis (.txt)",
+            data=result_text,
+            file_name=f"Analisis_{uploaded_file.name}.txt",
+            mime="text/plain"
+        )
 
-            try:
-                with st.spinner("Analyzing document..."):
-                    result_json = analyzer.analyze(document_text)
-            except Exception as e:
-                st.error("Gagal memanggil analyzer.")
-                st.exception(e)
-                st.write("Traceback:")
-                st.text(traceback.format_exc())
-                st.stop()
-
-            try:
-                result = parse_response(result_json)
-            except Exception:
-                st.error("Model tidak mengembalikan JSON valid.")
-                st.code(result_json)
-                st.stop()
-
-            st.success("Analysis completed!")
-            st.subheader("📝 Executive Summary")
-            st.write(result.get("summary", ""))
+st.markdown("---")
+st.caption("Tips HP Android: Jika aplikasi sering restart, buat file .streamlit/config.toml di repo GitHub kamu dengan opsi maxUploadSize = 200.")
